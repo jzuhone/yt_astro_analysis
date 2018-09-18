@@ -42,27 +42,27 @@ vlist = "xyz"
 def setup_sunyaev_zeldovich_fields(ds):
     def _t_squared(field, data):
         return data["gas","density"]*data["gas","kT"]*data["gas","kT"]
-    ds.add_field(("gas", "t_squared"), function = _t_squared,
+    ds.add_field(("gas", "t_squared"), function=_t_squared,
                  units="g*keV**2/cm**3")
 
     def _beta_par_squared(field, data):
         return data["gas","beta_par"]**2/data["gas","density"]
-    ds.add_field(("gas","beta_par_squared"), function = _beta_par_squared,
+    ds.add_field(("gas","beta_par_squared"), function=_beta_par_squared,
                  units="g/cm**3")
 
     def _beta_perp_squared(field, data):
         return data["gas","density"]*data["gas","velocity_magnitude"]**2/clight/clight - data["gas","beta_par_squared"]
-    ds.add_field(("gas","beta_perp_squared"), function = _beta_perp_squared,
+    ds.add_field(("gas","beta_perp_squared"), function=_beta_perp_squared,
                  units="g/cm**3")
 
     def _t_beta_par(field, data):
         return data["gas","kT"]*data["gas","beta_par"]
-    ds.add_field(("gas","t_beta_par"), function = _t_beta_par,
+    ds.add_field(("gas","t_beta_par"), function=_t_beta_par,
                  units="keV*g/cm**3")
 
     def _t_sz(field, data):
         return data["gas","density"]*data["gas","kT"]
-    ds.add_field(("gas","t_sz"), function = _t_sz,
+    ds.add_field(("gas","t_sz"), function=_t_sz,
                  units="keV*g/cm**3")
 
 def generate_beta_par(L):
