@@ -314,32 +314,8 @@ class SZProjection(object):
         small_beta = np.abs(bpar) < 1.0e-20
         bpar[small_beta] = 1.0e-20
 
-        comm = communication_system.communicators[-1]
-
-        nx, ny = self.nx,self.nx
-        signal = np.zeros((self.num_freqs,nx,ny))
-        xo = np.zeros(self.num_freqs)
-
-        k = int(0)
-
-        start_i = comm.rank*nx//comm.size
-        end_i = (comm.rank+1)*nx//comm.size
-
-        pbar = get_pbar("Computing SZ signal.", nx*nx)
-
-        for i in range(start_i, end_i):
-            for j in range(ny):
-                xo[:] = self.xinit[:]
-                SZpack.compute_combo_means(xo, tau[i,j], Te[i,j],
-                                           bpar[i,j], omega1[i,j],
-                                           sigma1[i,j], kappa1[i,j], bperp2[i,j])
-                signal[:,i,j] = xo[:]
-                pbar.update(k)
-                k += 1
-
-        signal = comm.mpi_allreduce(signal)
-
-        pbar.finish()
+        signal = SZpack.compute_combo_means_map(self.xinit, tau, Te, bpar, omega1,
+                                                sigma1, kappa1, bperp2)
 
         for i, field in enumerate(self.freq_fields):
             self.data[field] = I0*self.xinit[i]**3*signal[i,:,:]
