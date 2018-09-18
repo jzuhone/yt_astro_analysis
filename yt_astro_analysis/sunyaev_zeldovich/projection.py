@@ -24,8 +24,6 @@ from yt.utilities.physical_constants import sigma_thompson, clight, hcgs, kboltz
 from yt.funcs import fix_axis, get_pbar
 from yt.visualization.volume_rendering.off_axis_projection import \
     off_axis_projection
-from yt.utilities.parallel_tools.parallel_analysis_interface import \
-    communication_system, parallel_root_only
 from yt import units
 from yt.utilities.on_demand_imports import _astropy
 
@@ -322,7 +320,6 @@ class SZProjection(object):
         self.data["Tau"] = self.ds.arr(tau, "dimensionless")
         self.data["TeSZ"] = self.ds.arr(Te, "keV")
 
-    @parallel_root_only
     def write_fits(self, filename, sky_scale=None, sky_center=None, overwrite=True,
                    **kwargs):
         r""" Export images to a FITS file. Writes the SZ distortion in all
@@ -372,7 +369,6 @@ class SZProjection(object):
             fib.create_sky_wcs(sky_center, sky_scale)
         fib.writeto(filename, overwrite=overwrite, **kwargs)
 
-    @parallel_root_only
     def write_png(self, filename_prefix, cmap_name=None,
                   axes_units="kpc", log_fields=None):
         from yt.funcs import issue_deprecation_warning
@@ -455,7 +451,6 @@ class SZProjection(object):
             fig.tight_layout()
             plt.savefig(filename)
 
-    @parallel_root_only
     def write_hdf5(self, filename):
         r"""Export the set of S-Z fields to a set of HDF5 datasets.
 
