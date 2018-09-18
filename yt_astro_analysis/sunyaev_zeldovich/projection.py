@@ -399,6 +399,11 @@ class SZProjection(object):
     @parallel_root_only
     def write_png(self, filename_prefix, cmap_name=None,
                   axes_units="kpc", log_fields=None):
+        from yt.funcs import issue_deprecation_warning
+        issue_deprecation_warning("The 'write_png' method is deprecated and will "
+                                  "be removed in a future release. Please write "
+                                  "the projections to a FITS file and load that "
+                                  "into yt to use its plotting capabilities.")
         r""" Export images to PNG files. Writes the SZ distortion in all
         specified frequencies as well as the mass-weighted temperature and the
         optical depth. Distance units are in kpc.
