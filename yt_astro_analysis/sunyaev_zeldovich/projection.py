@@ -507,4 +507,4 @@ class SZProjection(object):
 
     @property
     def shape(self):
-        return (self.nx,self.nx)
+        return (self.nx, self.nx)
