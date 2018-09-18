@@ -300,9 +300,9 @@ class SZProjection(object):
         self.dy = wd[1]/nx
         self.nx = nx
 
-        self._compute_intensity(np.array(tau), np.array(Te), np.array(bpar),
-                                np.array(omega1), np.array(sigma1),
-                                np.array(kappa1), np.array(bperp2))
+        self._compute_intensity(np.asarray(tau), np.asarray(Te), np.asarray(bpar),
+                                np.asarray(omega1), np.asarray(sigma1),
+                                np.asarray(kappa1), np.asarray(bperp2))
 
         self.ds.field_info.pop(("gas","beta_par"))
 
