@@ -18,58 +18,148 @@ Chluba, Switzer, Nagai, Nelson, MNRAS, 2012, arXiv:1211.3206
 # The full license is in the file COPYING.txt, distributed with this software.
 #-----------------------------------------------------------------------------
 
-from yt.config import \
-    ytcfg
-from yt.utilities.physical_constants import sigma_thompson, clight, hcgs, kboltz, mh, Tcmb
-from yt.funcs import fix_axis, get_pbar
+from yt.utilities.physical_constants import clight, hcgs, kboltz, Tcmb
+from yt.funcs import fix_axis
 from yt.visualization.volume_rendering.off_axis_projection import \
     off_axis_projection
-from yt import units
+from yt.units import steradian
 from yt.utilities.on_demand_imports import _astropy
 
 import numpy as np
 
-I0 = (2*(kboltz*Tcmb)**3/((hcgs*clight)**2)/units.sr).in_units("MJy/steradian")
+I0 = (2*(kboltz*Tcmb)**3/((hcgs*clight)**2)/steradian).in_units("MJy/steradian")
 
-try:
-    import SZpack
-except ImportError:
-    pass
 
-vlist = "xyz"
-def setup_sunyaev_zeldovich_fields(ds):
+def setup_sunyaev_zeldovich_fields(ds, ftype):
     def _t_squared(field, data):
-        return data["gas","density"]*data["gas","kT"]*data["gas","kT"]
-    ds.add_field(("gas", "t_squared"), function=_t_squared,
-                 units="g*keV**2/cm**3")
+        return data[ftype, "optical_depth"]*data[ftype, "kT"]*data[ftype, "kT"]
+    ds.add_field((ftype, "t_squared"), function=_t_squared, sampling_type="local",
+                 units="keV**2/cm")
 
     def _beta_par_squared(field, data):
-        return data["gas","beta_par"]**2/data["gas","density"]
-    ds.add_field(("gas","beta_par_squared"), function=_beta_par_squared,
-                 units="g/cm**3")
+        return data[ftype, "beta_par"]**2/data[ftype, "optical_depth"]
+    ds.add_field((ftype, "beta_par_squared"), function=_beta_par_squared,
+                 sampling_type="local", units="1/cm")
 
     def _beta_perp_squared(field, data):
-        return data["gas","density"]*data["gas","velocity_magnitude"]**2/clight/clight - data["gas","beta_par_squared"]
-    ds.add_field(("gas","beta_perp_squared"), function=_beta_perp_squared,
-                 units="g/cm**3")
+        ret = data[ftype, "optical_depth"]*data[ftype, "velocity_magnitude"]**2
+        ret /= clight**2
+        ret -= data[ftype, "beta_par_squared"]
+        return ret
+    ds.add_field((ftype, "beta_perp_squared"), function=_beta_perp_squared,
+                 sampling_type="local", units="1/cm")
 
     def _t_beta_par(field, data):
-        return data["gas","kT"]*data["gas","beta_par"]
-    ds.add_field(("gas","t_beta_par"), function=_t_beta_par,
-                 units="keV*g/cm**3")
+        return data[ftype, "kT"]*data[ftype, "beta_par"]
+    ds.add_field((ftype, "t_beta_par"), function=_t_beta_par,
+                 sampling_type="local", units="keV/cm")
 
     def _t_sz(field, data):
-        return data["gas","density"]*data["gas","kT"]
-    ds.add_field(("gas","t_sz"), function=_t_sz,
-                 units="keV*g/cm**3")
+        return data[ftype, "optical_depth"]*data[ftype, "kT"]
+    ds.add_field((ftype, "t_sz"), function=_t_sz,
+                 sampling_type="local", units="keV/cm")
 
-def generate_beta_par(L):
+
+def generate_beta_par(L, ftype):
     def _beta_par(field, data):
-        vpar = data["density"]*(data["velocity_x"]*L[0]+
-                                data["velocity_y"]*L[1]+
-                                data["velocity_z"]*L[2])
+        vpar = data[ftype, "optical_depth"]*(data[ftype, "velocity_x"]*L[0] +
+                                             data[ftype, "velocity_y"]*L[1] +
+                                             data[ftype, "velocity_z"]*L[2])
         return vpar/clight
     return _beta_par
+
+
+class SZImage(object):
+
+    def __init__(self, data, nx, bounds):
+        self.nx = nx
+        self.bounds = bounds
+        self.data = data
+        self.dx = (bounds[1]-bounds[0])/nx
+
+    def write_fits(self, filename, sky_scale=None, sky_center=None, overwrite=True,
+                   **kwargs):
+        r""" Export images to a FITS file. Writes the SZ distortion in all
+        specified frequencies as well as the mass-weighted temperature and the
+        optical depth. Distance units are in kpc, unless *sky_center*
+        and *scale* are specified.
+
+        Parameters
+        ----------
+        filename : string
+            The name of the FITS file to be written.
+        sky_scale : tuple
+            Conversion between an angle unit and a length unit, if sky
+            coordinates are desired, e.g. (1.0, "arcsec/kpc")
+        sky_center : tuple, optional
+            The (RA, Dec) coordinate in degrees of the central pixel. Must
+            be specified with *sky_scale*.
+        overwrite : boolean, optional
+            If the file already exists, do we overwrite?
+
+        Additional keyword arguments are passed to
+        :meth:`~astropy.io.fits.HDUList.writeto`.
+
+        Examples
+        --------
+        >>> # This example just writes out a FITS file with kpc coords
+        >>> szimg.write_fits("SZbullet.fits", overwrite=False)
+        >>> # This example uses sky coords
+        >>> sky_scale = (1., "arcsec/kpc") # One arcsec per kpc
+        >>> sky_center = (30., 45., "deg")
+        >>> szimg.write_fits("SZbullet.fits", sky_center=sky_center, sky_scale=sky_scale)
+        """
+        from yt.visualization.fits_image import FITSImageData
+
+        dx = self.dx.in_units("kpc")
+
+        w = _astropy.pywcs.WCS(naxis=2)
+        w.wcs.crpix = [0.5*(self.nx+1)]*2
+        w.wcs.cdelt = [dx.v]*2
+        w.wcs.crval = [0.0]*2
+        w.wcs.cunit = ["kpc"]*2
+        w.wcs.ctype = ["LINEAR"]*2
+
+        fib = FITSImageData(self.data, fields=list(self.data.keys()), wcs=w)
+        if sky_scale is not None and sky_center is not None:
+            fib.create_sky_wcs(sky_center, sky_scale)
+        fib.writeto(filename, overwrite=overwrite, **kwargs)
+
+    def write_hdf5(self, filename):
+        r"""Export the set of S-Z fields to a set of HDF5 datasets.
+
+        Parameters
+        ----------
+        filename : string
+            This file will be opened in "write" mode.
+
+        Examples
+        --------
+        >>> szimg.write_hdf5("SZsloshing.h5")
+        """
+        import h5py
+        for field, data in self.items():
+            data.write_hdf5(filename, dataset_name=field)
+        f = h5py.File(filename, "r+")
+        f.flush()
+        f.close()
+
+    def keys(self):
+        return self.data.keys()
+
+    def items(self):
+        return self.data.items()
+
+    def values(self):
+        return self.data.values()
+
+    def __getitem__(self, key):
+        return self.data[key]
+
+    @property
+    def shape(self):
+        return self.nx, self.nx
+
 
 class SZProjection(object):
     r""" Initialize a SZProjection object.
@@ -80,8 +170,6 @@ class SZProjection(object):
         The dataset
     freqs : array_like
         The frequencies (in GHz) at which to compute the SZ spectral distortion.
-    mue : float, optional
-        Mean molecular weight for determining the electron number density.
     high_order : boolean, optional
         Should we calculate high-order moments of velocity and temperature?
 
@@ -90,23 +178,21 @@ class SZProjection(object):
     >>> freqs = [90., 180., 240.]
     >>> szprj = SZProjection(ds, freqs, high_order=True)
     """
-    def __init__(self, ds, freqs, mue=1.143, high_order=False):
+    def __init__(self, ds, freqs, high_order=False, no_rel=False,
+                 no_kinetic=False, ftype="gas"):
 
         self.ds = ds
         self.num_freqs = len(freqs)
-        self.high_order = high_order
+        self.ftype = ftype
+        if no_kinetic:
+            self.high_order = False
+        else:
+            self.high_order = high_order
+        self.no_rel = no_rel
+        self.no_kinetic = no_kinetic
         self.freqs = ds.arr(freqs, "GHz")
-        self.mueinv = 1./mue
         self.xinit = hcgs*self.freqs.in_units("Hz")/(kboltz*Tcmb)
         self.freq_fields = ["%d_GHz" % (int(freq)) for freq in freqs]
-        self.data = {}
-
-        self.display_names = {}
-        self.display_names["TeSZ"] = r"$\mathrm{T_e}$"
-        self.display_names["Tau"] = r"$\mathrm{\tau}$"
-
-        for f, field in zip(self.freqs, self.freq_fields):
-            self.display_names[field] = r"$\mathrm{\Delta{I}_{%d\ GHz}}$" % int(f)
 
     def on_axis(self, axis, center="c", width=(1, "unitary"), nx=800, source=None):
         r""" Make an on-axis projection of the SZ signal.
@@ -157,42 +243,45 @@ class SZProjection(object):
         axis = fix_axis(axis, self.ds)
         ctr, dctr = self.ds.coordinates.sanitize_center(center, axis)
         width = self.ds.coordinates.sanitize_width(axis, width, None)
+        res = (nx, nx)
 
         L = np.zeros(3)
         L[axis] = 1.0
 
-        beta_par = generate_beta_par(L)
-        self.ds.add_field(("gas","beta_par"), function=beta_par, units="g/cm**3")
-        setup_sunyaev_zeldovich_fields(self.ds)
-        proj = self.ds.proj("density", axis, center=ctr, data_source=source)
+        beta_par = generate_beta_par(L, self.ftype)
+        self.ds.add_field((self.ftype, "beta_par"), function=beta_par, units="1/cm",
+                          sampling_type='local')
+        setup_sunyaev_zeldovich_fields(self.ds, self.ftype)
+        proj = self.ds.proj((self.ftype, "optical_depth"), axis, center=ctr,
+                            data_source=source)
         frb = proj.to_frb(width[0], nx, height=width[1])
-        dens = frb["density"]
-        Te = frb["t_sz"]/dens
-        bpar = frb["beta_par"]/dens
-        omega1 = frb["t_squared"]/dens/(Te*Te) - 1.
-        bperp2 = np.zeros((nx,nx))
-        sigma1 = np.zeros((nx,nx))
-        kappa1 = np.zeros((nx,nx))
+        tau = frb[self.ftype, "optical_depth"]
+        Te = frb[self.ftype, "t_sz"]/tau
+        if self.no_kinetic:
+            bpar = np.zeros(res)
+        else:
+            bpar = frb[self.ftype, "beta_par"]/tau
+        omega1 = frb[self.ftype, "t_squared"]/tau/(Te*Te) - 1.
+        bperp2 = np.zeros(res)
+        sigma1 = np.zeros(res)
+        kappa1 = np.zeros(res)
         if self.high_order:
-            bperp2 = frb["beta_perp_squared"]/dens
-            sigma1 = frb["t_beta_par"]/dens/Te - bpar
-            kappa1 = frb["beta_par_squared"]/dens - bpar*bpar
-        tau = sigma_thompson*dens*self.mueinv/mh
+            bperp2 = frb[self.ftype, "beta_perp_squared"]/tau
+            sigma1 = frb[self.ftype, "t_beta_par"]/tau/Te - bpar
+            kappa1 = frb[self.ftype, "beta_par_squared"]/tau - bpar*bpar
 
-        nx,ny = frb.buff_size
-        self.bounds = frb.bounds
-        self.dx = (frb.bounds[1]-frb.bounds[0])/nx
-        self.dy = (frb.bounds[3]-frb.bounds[2])/ny
-        self.nx = nx
+        nx, ny = frb.buff_size
+        bounds = frb.bounds
 
-        self._compute_intensity(np.array(tau), np.array(Te), np.array(bpar),
-                                np.array(omega1), np.array(sigma1),
-                                np.array(kappa1), np.array(bperp2))
+        data = self._compute_intensity(tau, Te, bpar, omega1, sigma1,
+                                       kappa1, bperp2)
 
-        self.ds.field_info.pop(("gas","beta_par"))
+        self.ds.field_info.pop(("gas", "beta_par"))
+
+        return SZImage(data, nx, bounds)
 
     def off_axis(self, L, center="c", width=(1.0, "unitary"), depth=(1.0,"unitary"),
-                 nx=800, nz=800, north_vector=None, no_ghost=False, source=None):
+                 nx=800, north_vector=None, source=None):
         r""" Make an off-axis projection of the SZ signal.
 
         Parameters
@@ -235,21 +324,10 @@ class SZProjection(object):
             are assumed
         nx : integer, optional
             The dimensions on a side of the projection image.
-        nz : integer, optional
-            Deprecated, this is still in the function signature for API
-            compatibility
         north_vector : a sequence of floats
             A vector defining the 'up' direction in the plot.  This
             option sets the orientation of the slicing plane.  If not
             set, an arbitrary grid-aligned north-vector is chosen.
-        no_ghost: bool, optional
-            Optimization option for off-axis cases. If True, homogenized bricks will
-            extrapolate out from grid instead of interpolating from
-            ghost zones that have to first be calculated.  This can
-            lead to large speed improvements, but at a loss of
-            accuracy/smoothness in resulting image.  The effects are
-            less notable when the transfer function is smooth and
-            broad. Default: True
         source : yt.data_objects.data_containers.YTSelectionContainer, optional
             If specified, this will be the data source used for selecting regions 
             to project.
@@ -267,220 +345,69 @@ class SZProjection(object):
         if source is None:
             source = self.ds
 
-        beta_par = generate_beta_par(L)
-        self.ds.add_field(("gas","beta_par"), function=beta_par, units="g/cm**3")
-        setup_sunyaev_zeldovich_fields(self.ds)
+        beta_par = generate_beta_par(L, self.ftype)
+        self.ds.add_field((self.ftype, "beta_par"), function=beta_par, units="1/cm",
+                          sampling_type="local")
+        setup_sunyaev_zeldovich_fields(self.ds, self.ftype)
 
-        dens = off_axis_projection(source, ctr, L, w, res, "density",
-                                   north_vector=north_vector, no_ghost=no_ghost)
+        tau = off_axis_projection(source, ctr, L, w, res, (self.ftype, "optical_depth"),
+                                  north_vector=north_vector)
         Te = off_axis_projection(source, ctr, L, w, res, "t_sz",
-                                 north_vector=north_vector, no_ghost=no_ghost)/dens
-        bpar = off_axis_projection(source, ctr, L, w, res, "beta_par",
-                                   north_vector=north_vector, no_ghost=no_ghost)/dens
-        omega1 = off_axis_projection(source, ctr, L, w, res, "t_squared",
-                                     north_vector=north_vector, no_ghost=no_ghost)/dens
+                                 north_vector=north_vector)/tau
+        if self.no_kinetic:
+            bpar = np.zeros(res)
+        else:
+            bpar = off_axis_projection(source, ctr, L, w, res, (self.ftype, "beta_par"),
+                                       north_vector=north_vector)/tau
+        omega1 = off_axis_projection(source, ctr, L, w, res, (self.ftype, "t_squared"),
+                                     north_vector=north_vector)/tau
         omega1 = omega1/(Te*Te) - 1.
         if self.high_order:
-            bperp2 = off_axis_projection(source, ctr, L, w, res, "beta_perp_squared", 
-                                         north_vector=north_vector, no_ghost=no_ghost)/dens
-            sigma1 = off_axis_projection(source, ctr, L, w, res, "t_beta_par", 
-                                         north_vector=north_vector, no_ghost=no_ghost)/dens
+            bperp2 = off_axis_projection(source, ctr, L, w, res, (self.ftype, "beta_perp_squared"),
+                                         north_vector=north_vector)/tau
+            sigma1 = off_axis_projection(source, ctr, L, w, res, (self.ftype, "t_beta_par"),
+                                         north_vector=north_vector)/tau
             sigma1 = sigma1/Te - bpar
-            kappa1 = off_axis_projection(source, ctr, L, w, res, "beta_par_squared", 
-                                         north_vector=north_vector, no_ghost=no_ghost)/dens
+            kappa1 = off_axis_projection(source, ctr, L, w, res, (self.ftype, "beta_par_squared"),
+                                         north_vector=north_vector)/tau
             kappa1 -= bpar
         else:
-            bperp2 = np.zeros((nx,nx))
-            sigma1 = np.zeros((nx,nx))
-            kappa1 = np.zeros((nx,nx))
-        tau = sigma_thompson*dens*self.mueinv/mh
+            bperp2 = np.zeros(res)
+            sigma1 = np.zeros(res)
+            kappa1 = np.zeros(res)
 
-        self.bounds = (-0.5*wd[0], 0.5*wd[0], -0.5*wd[1], 0.5*wd[1])
-        self.dx = wd[0]/nx
-        self.dy = wd[1]/nx
-        self.nx = nx
+        bounds = (-0.5*wd[0], 0.5*wd[0], -0.5*wd[1], 0.5*wd[1])
 
-        self._compute_intensity(np.asarray(tau), np.asarray(Te), np.asarray(bpar),
-                                np.asarray(omega1), np.asarray(sigma1),
-                                np.asarray(kappa1), np.asarray(bperp2))
+        data = self._compute_intensity(tau, Te, bpar, omega1, sigma1,
+                                       kappa1, bperp2)
 
-        self.ds.field_info.pop(("gas","beta_par"))
+        self.ds.field_info.pop((self.ftype, "beta_par"))
+
+        return SZImage(data, nx, bounds)
 
     def _compute_intensity(self, tau, Te, bpar, omega1, sigma1, kappa1, bperp2):
+        try:
+            import SZpack
+        except ImportError:
+            raise ImportError("Could not import SZpack's Python bindings! Check your install!")
 
         # Bad hack, but we get NaNs if we don't do something like this
         small_beta = np.abs(bpar) < 1.0e-20
         bpar[small_beta] = 1.0e-20
 
-        signal = SZpack.compute_combo_means_map(self.xinit, tau, Te, bpar, omega1,
-                                                sigma1, kappa1, bperp2)
+        signal = SZpack.compute_combo_means_map(self.xinit, np.asarray(tau, order="C"),
+                                                np.asarray(Te, order="C"),
+                                                np.asarray(bpar, order="C"),
+                                                np.asarray(omega1, order="C"),
+                                                np.asarray(sigma1, order="C"),
+                                                np.asarray(kappa1, order="C"),
+                                                np.asarray(bperp2, order="C"))
+
+        data = {}
 
         for i, field in enumerate(self.freq_fields):
-            self.data[field] = I0*self.xinit[i]**3*signal[i,:,:]
-        self.data["Tau"] = self.ds.arr(tau, "dimensionless")
-        self.data["TeSZ"] = self.ds.arr(Te, "keV")
+            data[field] = I0*self.xinit[i]**3*signal[i,:,:]
+        data["Tau"] = self.ds.arr(tau, "dimensionless")
+        data["TeSZ"] = self.ds.arr(Te, "keV")
 
-    def write_fits(self, filename, sky_scale=None, sky_center=None, overwrite=True,
-                   **kwargs):
-        r""" Export images to a FITS file. Writes the SZ distortion in all
-        specified frequencies as well as the mass-weighted temperature and the
-        optical depth. Distance units are in kpc, unless *sky_center*
-        and *scale* are specified. 
-
-        Parameters
-        ----------
-        filename : string
-            The name of the FITS file to be written. 
-        sky_scale : tuple
-            Conversion between an angle unit and a length unit, if sky
-            coordinates are desired, e.g. (1.0, "arcsec/kpc")
-        sky_center : tuple, optional
-            The (RA, Dec) coordinate in degrees of the central pixel. Must
-            be specified with *sky_scale*.
-        overwrite : boolean, optional
-            If the file already exists, do we overwrite?
-
-        Additional keyword arguments are passed to
-        :meth:`~astropy.io.fits.HDUList.writeto`.
-
-        Examples
-        --------
-        >>> # This example just writes out a FITS file with kpc coords
-        >>> szprj.write_fits("SZbullet.fits", overwrite=False)
-        >>> # This example uses sky coords
-        >>> sky_scale = (1., "arcsec/kpc") # One arcsec per kpc
-        >>> sky_center = (30., 45., "deg")
-        >>> szprj.write_fits("SZbullet.fits", sky_center=sky_center, sky_scale=sky_scale)
-        """
-        from yt.visualization.fits_image import FITSImageData
-
-        dx = self.dx.in_units("kpc")
-        dy = dx
-
-        w = _astropy.pywcs.WCS(naxis=2)
-        w.wcs.crpix = [0.5*(self.nx+1)]*2
-        w.wcs.cdelt = [dx.v,dy.v]
-        w.wcs.crval = [0.0,0.0]
-        w.wcs.cunit = ["kpc"]*2
-        w.wcs.ctype = ["LINEAR"]*2
-
-        fib = FITSImageData(self.data, fields=self.data.keys(), wcs=w)
-        if sky_scale is not None and sky_center is not None:
-            fib.create_sky_wcs(sky_center, sky_scale)
-        fib.writeto(filename, overwrite=overwrite, **kwargs)
-
-    def write_png(self, filename_prefix, cmap_name=None,
-                  axes_units="kpc", log_fields=None):
-        from yt.funcs import issue_deprecation_warning
-        issue_deprecation_warning("The 'write_png' method is deprecated and will "
-                                  "be removed in a future release. Please write "
-                                  "the projections to a FITS file and load that "
-                                  "into yt to use its plotting capabilities.")
-        r""" Export images to PNG files. Writes the SZ distortion in all
-        specified frequencies as well as the mass-weighted temperature and the
-        optical depth. Distance units are in kpc.
-
-        Parameters
-        ----------
-        filename_prefix : string
-            The prefix of the image filenames.
-
-        Examples
-        --------
-        >>> szprj.write_png("SZsloshing")
-        """
-        if cmap_name is None:
-            cmap_name = ytcfg.get("yt", "default_colormap")
-        
-        import matplotlib
-        matplotlib.use('Agg')
-        import matplotlib.pyplot as plt
-        if log_fields is None: log_fields = {}
-        ticks_font = matplotlib.font_manager.FontProperties(family='serif',size=16)
-        extent = tuple([bound.in_units(axes_units).value for bound in self.bounds])
-        for field, image in self.items():
-            data = image.copy()
-            vmin, vmax = image.min(), image.max()
-            negative = False
-            crossover = False
-            if vmin < 0 and vmax < 0:
-                data *= -1
-                negative = True
-            if field in log_fields:
-                log_field = log_fields[field]
-            else:
-                log_field = True
-            if log_field:
-                formatter = matplotlib.ticker.LogFormatterMathtext()
-                norm = matplotlib.colors.LogNorm()
-                if vmin < 0 and vmax > 0:
-                    crossover = True
-                    linthresh = min(vmax, -vmin)/100.
-                    norm=matplotlib.colors.SymLogNorm(linthresh,
-                                                      vmin=vmin, vmax=vmax)
-            else:
-                norm = None
-                formatter = None
-            filename = filename_prefix+"_"+field+".png"
-            cbar_label = self.display_names[field]
-            units = self.data[field].units.latex_representation()
-            if units is not None and units != "":
-                cbar_label += r'$\ \ ('+units+r')$'
-            fig = plt.figure(figsize=(10.0,8.0))
-            ax = fig.add_subplot(111)
-            cax = ax.imshow(data.d, norm=norm, extent=extent, cmap=cmap_name, origin="lower")
-            for label in ax.get_xticklabels():
-                label.set_fontproperties(ticks_font)
-            for label in ax.get_yticklabels():
-                label.set_fontproperties(ticks_font)
-            ax.set_xlabel(r"$\mathrm{x\ (%s)}$" % axes_units, fontsize=16)
-            ax.set_ylabel(r"$\mathrm{y\ (%s)}$" % axes_units, fontsize=16)
-            cbar = fig.colorbar(cax, format=formatter)
-            cbar.ax.set_ylabel(cbar_label, fontsize=16)
-            if negative:
-                cbar.ax.set_yticklabels(["-"+label.get_text()
-                                         for label in cbar.ax.get_yticklabels()])
-            if crossover:
-                yticks = list(-10**np.arange(np.floor(np.log10(-vmin)),
-                                             np.rint(np.log10(linthresh))-1, -1)) + [0] + \
-                         list(10**np.arange(np.rint(np.log10(linthresh)),
-                                            np.ceil(np.log10(vmax))+1))
-                cbar.set_ticks(yticks)
-            for label in cbar.ax.get_yticklabels():
-                label.set_fontproperties(ticks_font)
-            fig.tight_layout()
-            plt.savefig(filename)
-
-    def write_hdf5(self, filename):
-        r"""Export the set of S-Z fields to a set of HDF5 datasets.
-
-        Parameters
-        ----------
-        filename : string
-            This file will be opened in "write" mode.
-
-        Examples
-        --------
-        >>> szprj.write_hdf5("SZsloshing.h5")
-        """
-        for field, data in self.items():
-            data.write_hdf5(filename, dataset_name=field)
-
-    def keys(self):
-        return self.data.keys()
-
-    def items(self):
-        return self.data.items()
-
-    def values(self):
-        return self.data.values()
-
-    def has_key(self, key):
-        return key in self.data.keys()
-
-    def __getitem__(self, key):
-        return self.data[key]
-
-    @property
-    def shape(self):
-        return (self.nx, self.nx)
+        return data
