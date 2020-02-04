@@ -34,12 +34,12 @@ def setup_sunyaev_zeldovich_fields(ds, ftype):
     def _t_squared(field, data):
         return data[ftype, "optical_depth"]*data[ftype, "kT"]*data[ftype, "kT"]
     ds.add_field((ftype, "t_squared"), function=_t_squared, sampling_type="local",
-                 units="keV**2/cm")
+                 units="keV**2/cm", force_override=True)
 
     def _beta_par_squared(field, data):
         return data[ftype, "beta_par"]**2/data[ftype, "optical_depth"]
     ds.add_field((ftype, "beta_par_squared"), function=_beta_par_squared,
-                 sampling_type="local", units="1/cm")
+                 sampling_type="local", units="1/cm", force_override=True)
 
     def _beta_perp_squared(field, data):
         ret = data[ftype, "optical_depth"]*data[ftype, "velocity_magnitude"]**2
@@ -47,17 +47,17 @@ def setup_sunyaev_zeldovich_fields(ds, ftype):
         ret -= data[ftype, "beta_par_squared"]
         return ret
     ds.add_field((ftype, "beta_perp_squared"), function=_beta_perp_squared,
-                 sampling_type="local", units="1/cm")
+                 sampling_type="local", units="1/cm", force_override=True)
 
     def _t_beta_par(field, data):
         return data[ftype, "kT"]*data[ftype, "beta_par"]
     ds.add_field((ftype, "t_beta_par"), function=_t_beta_par,
-                 sampling_type="local", units="keV/cm")
+                 sampling_type="local", units="keV/cm", force_override=True)
 
     def _t_sz(field, data):
         return data[ftype, "optical_depth"]*data[ftype, "kT"]
     ds.add_field((ftype, "t_sz"), function=_t_sz,
-                 sampling_type="local", units="keV/cm")
+                 sampling_type="local", units="keV/cm", force_override=True)
 
 
 def generate_beta_par(L, ftype):
@@ -250,7 +250,7 @@ class SZProjection(object):
 
         beta_par = generate_beta_par(L, self.ftype)
         self.ds.add_field((self.ftype, "beta_par"), function=beta_par, units="1/cm",
-                          sampling_type='local')
+                          sampling_type='local', force_override=True)
         setup_sunyaev_zeldovich_fields(self.ds, self.ftype)
         proj = self.ds.proj((self.ftype, "optical_depth"), axis, center=ctr,
                             data_source=source)
@@ -347,7 +347,7 @@ class SZProjection(object):
 
         beta_par = generate_beta_par(L, self.ftype)
         self.ds.add_field((self.ftype, "beta_par"), function=beta_par, units="1/cm",
-                          sampling_type="local")
+                          sampling_type="local", force_override=True)
         setup_sunyaev_zeldovich_fields(self.ds, self.ftype)
 
         tau = off_axis_projection(source, ctr, L, w, res, (self.ftype, "optical_depth"),
